@@ -1,8 +1,16 @@
 package com.springbooot.servicios.anuncios.app.models.service;
 
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
+
+import javax.annotation.PostConstruct;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -17,6 +25,9 @@ import org.springframework.web.bind.annotation.RestController;
 import com.springbooot.servicios.anuncios.app.models.dao.NotificadorDao;
 import com.springbooot.servicios.anuncios.app.models.entity.Notificador;
 
+import reactor.core.publisher.EmitterProcessor;
+import reactor.core.publisher.Flux;
+
 @RestController
 @RequestMapping("/notificador")
 @CrossOrigin
@@ -26,8 +37,16 @@ public class NotificadorService {
 	@Autowired
     NotificadorDao notificadordao;
 	
-	
-	
+    private EmitterProcessor<Notificador> notificationProcessor;
+    private static List<Notificador> listaNotificadores = new ArrayList<>();
+    
+    @PostConstruct
+    private void createProcessor() {
+        notificationProcessor = EmitterProcessor.<Notificador>create();
+    }
+    
+    
+    
  //Servicio de Mostrar Lista Completa
   @RequestMapping(value= "/all",method =RequestMethod.GET)
 	  
@@ -46,15 +65,24 @@ public class NotificadorService {
   
   
   //Servicio Para Crear Notificador
-  	@RequestMapping(value="/save",method=RequestMethod.POST)
-	public Notificador saveNotificador(@RequestBody Notificador notificador) {
+  @RequestMapping(
+          path = "/save",
+          method = RequestMethod.POST)
+  public ResponseEntity<?> creat(
+          @RequestBody Notificador entityParam) {
+	  Notificador temp = notificadordao.save(entityParam);
 		
+				
 		
-		
-		Notificador temp = notificadordao.save(notificador);
-	
-		return temp;		
-	}
+      listaNotificadores.add(entityParam);
+
+      // cuando se crea una nueva persona.... notificar esta accion al emisor
+      System.out.println("Notificando nueva persona:" + entityParam.getNombre());
+      notificationProcessor.onNext(entityParam);
+
+      return new ResponseEntity<>(entityParam, HttpStatus.OK);
+  }
+
   
   //Servicio Para Eliminar Notificador
   	
@@ -144,9 +172,59 @@ public class NotificadorService {
  		return notificadordao.findByNombreAndPassword(nombre, password);
  		
  	}	
+     
+     
+     
+     
+     private Flux<ServerSentEvent<Notificador>> getNotificadorSSE() {
+
+         // notification processor retorna un FLUX en el cual podemos estar "suscritos" cuando este tenga otro valor ...
+         return notificationProcessor
+                 .log().map(
+                         (notificador) -> {
+                             System.out.println("Sending Notificador:" + notificador.getId());
+                             return ServerSentEvent.<Notificador>builder()
+                                     .id(UUID.randomUUID().toString())
+                                     .event("notificador-result")
+                                     .data(notificador)
+                                     .build();
+                         }).concatWith(Flux.never());
+     }
+     
+     
+     
+     private Flux<ServerSentEvent<Notificador>> getNotificationHeartbeat() {
+         return Flux.interval(Duration.ofSeconds(10))
+                 .map(i -> {
+                     System.out.println(String.format("sending heartbeat [%s] ...", i.toString()));
+                     return ServerSentEvent.<Notificador>builder()
+                             .id(String.valueOf(i))
+                             .event("heartbeat-result")
+                             .data(null)
+                             .build();
+                 });
+     }     
+
+    		 
+     @GetMapping(
+             value = "/notification/sse"
+     )
+     public Flux<ServerSentEvent<Notificador>>
+             getJobResultNotification() {
+
+         return Flux.merge(
+                 getNotificationHeartbeat(),
+                 getNotificadorSSE()
+         );
+
+     }
+     /* -------------------------------------------------------------------------------------------------------------- */
+	 
+    		 
+    		 
+    		 
+    		 
 }
-
-
 
 
 
